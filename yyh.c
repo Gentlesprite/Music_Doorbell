@@ -1,10 +1,7 @@
-//////////////////////////////////////////////
-// 51单片机音乐播放器程序
-// AT89S52+11.0592MHz+无源蜂鸣器
-// 共三个按键:上一曲、一下曲、播放\暂停
-// 注意：按键必须按下约1S才有相应动作,播放完一首歌曲无按键按下时顺序播放
 
-//////////////////////////////////////////////
+// AT89S52+11.0592MHz+无源蜂鸣器
+// 共三个按键:叮咚门铃按钮、音乐门铃按钮、下一曲按键
+//v0.4:对代码进行优化
 #include "REG52.H"
 #include "lcd1602.h"
 typedef unsigned char u8; // 定义无符号8位整型变量
@@ -14,35 +11,30 @@ sbit play_down = P3 ^ 4;  // 下一首歌
 sbit pause = P3 ^ 3;      // 播放\暂停int1
 sbit speaker = P2 ^ 0;    // 无源蜂鸣器
 sbit led = P1 ^ 0;
-#define sound_amount 5 // 歌曲的数量
-//////////////////////////////////////////////
+
 unsigned char timer0h, timer0l, time; // timer0h,timer0l为定时器T0的高低位初值,time为对应的节拍时间
 unsigned char music_num; // music_num为歌曲编号,music_num=0表示刚开机时的状态,num是查找歌曲数据表的地址
 unsigned char press_count;
-unsigned int LcdChange;
+unsigned int lcd_change;
 unsigned char doorbell_signal;
 // unsigned int num;
 signed int fre;               // 对应频率数据表的地址
 bit play_enable;              // 歌曲播放的使能标志位,用于播放\暂停
-void delay(unsigned char t);  // 延时子函数,控制发音的时间长度
-void delayms(unsigned int t); // 普通延时子程序,可用于按键消抖
-void song(void);              // 演奏一个音符
+void DelayBeat(unsigned char t);  // 延时子函数,控制发音的时间长度
+void DelayMs(unsigned int t); // 普通延时子程序,可用于按键消抖
+void PlayANote(void);              // 演奏一个音符
 void music_play(void);        // 播放歌曲
 
-//////////////////////////////////////////////
+
 // 每三个数字,代表一个音符
 // 第一个数字是音符的数值1234567之一(第几个音),代表哆来咪发...
 // 第二个数字是0123之一,代表低音\中音\高音\超高音(第几个八度)
 // 第三个数字是时间长度,以半拍为单位,乐曲数据表的结尾是三个0
-//////////////////////////////////////////////
-void stop(void)
-{
-    play_enable = ~play_enable;
-    speaker = 1;
-}
 
-unsigned char code song_doorbell[] = {3, 3, 1, 1, 3, 1, 0, 0, 0};
-// 《世上只有妈妈好》
+
+
+unsigned char code song_doorbell[] = {3, 3, 1, 1, 3, 2, 0, 0, 0};
+//《世上只有妈妈好》
 unsigned char code song1[] = {6, 2, 3, 5, 2, 1, 3, 2, 2, 5, 2, 2, 1, 3, 2, 6, 2, 1,
                               // 6,2,3代表6,中音,3个半拍;
                               // 5,2,1代表5,中音,1个半拍;
@@ -53,6 +45,8 @@ unsigned char code song1[] = {6, 2, 3, 5, 2, 1, 3, 2, 2, 5, 2, 2, 1, 3, 2, 6, 2,
                               5, 2, 1, 6, 2, 4, 3, 2, 2, 5, 2, 1, 6, 2, 1, 5, 2, 2, 3, 2, 2, 1, 2, 1, 6, 1, 1, 5, 2, 1,
                               3, 2, 1, 2, 2, 4, 2, 2, 3, 3, 2, 1, 5, 2, 2, 5, 2, 1, 6, 2, 1, 3, 2, 2, 2, 2, 2, 1, 2, 4,
                               5, 2, 3, 3, 2, 1, 2, 2, 1, 1, 2, 1, 6, 1, 1, 1, 2, 1, 5, 1, 6, 0, 0, 0};
+
+
 
 // 《当你孤单你会想起谁》
 unsigned char code song2[] = {3, 2, 2, 3, 2, 1, 4, 2, 1, 3, 2, 2, 2, 2, 1, 1, 2, 1, 2, 2, 2, 5, 2, 2, 2,
@@ -81,9 +75,10 @@ unsigned char code FREQL[] = {0x42, 0xC1, 0x17, 0xB6, 0xD0, 0xD1, 0xB6,       //
                               0xEE, 0x44, 0x6B, 0xB4, 0xF4, 0x2D,             // 高音 234567
                               0x47, 0x77, 0xA2, 0xB6, 0xDA, 0xFA, 0x16};      // 超高音 1234567
 
+
 void LcdFirstChange(void)
 {
-    if (LcdChange == 0)
+    if (lcd_change == 0)
     {
         write_num(11, music_num, 1);
 
@@ -94,6 +89,22 @@ void LcdSecondChange(void)
     write_num(13, press_count, 2);
 }
 
+
+void StopMusic(void)
+{
+    play_enable = ~play_enable;
+    speaker = 1;
+}
+
+void PlayANote(void) // 演奏一个音符
+{
+    TH0 = timer0h; // 控制音调
+    TL0 = timer0l;
+    TR0 = 1;     // 启动T0, 由T0输出方波发音
+    DelayBeat(time); // 每个音符的演奏时间
+}
+
+
 void main(void)
 {
     init1602();
@@ -102,7 +113,7 @@ void main(void)
     ET1 = 1;
     // time0init();   // 调用定时器0初始化函数
     TMOD = 0x11; // T0 T1 均在工作方式1
-    LcdChange = 1;
+    lcd_change = 1;
     lcd1602_write_character(0, 1, " Welcome to Use");
     lcd1602_write_character(0, 2, " Press count:00 "); // 门铃标号
 
@@ -114,19 +125,19 @@ void main(void)
 
         if (!pause) // 暂停键处理
         {
-            delayms(1);
+            DelayMs(1);
             if (!pause)
             {   
-                LcdChange = 0;
+                lcd_change = 0;
                 doorbell_signal = 0;
                 lcd1602_write_character(0, 1, "  Song num:     ");
-                delayms(5);
+                DelayMs(5);
                 LcdFirstChange();
                 press_count++;
                 
                 if (music_num == 0) // music_num=0只有在刚开机,且未按下暂停键时存在,表示刚开机时的状态,按下后从第一首开始播放
                 {
-                    LcdChange = 0;
+                    lcd_change = 0;
                     lcd1602_write_character(0, 1, "  Song num:01   ");
                     // press_count++;
                     doorbell_signal = 0;
@@ -136,7 +147,7 @@ void main(void)
                 }
                 else
                 {
-                    stop();
+                    StopMusic();
                 }
                 while (!pause) // 若按着暂停键不放手时的处理
                 {
@@ -150,9 +161,9 @@ void main(void)
         } // while结束
         if (doorbell == 0)
         {
-            delayms(1);
+            DelayMs(1);
             if (doorbell == 0)
-                LcdChange = 1;
+                lcd_change = 1;
             {
                 lcd1602_write_character(0, 1, " Door bell mode");
                 num = 0;
@@ -163,7 +174,7 @@ void main(void)
                 {
                     if (play_enable == 0)
                     {
-                        LcdChange = 0;
+                        lcd_change = 0;
                     } // 如果是暂停，则显示时间不变//（暂停时play_enable==0）
                 }
             }
@@ -171,7 +182,7 @@ void main(void)
 
         if ((!play_down) && (music_num != 0))
         {
-            delayms(1);
+            DelayMs(1);
             if ((!play_down) && (music_num != 0))
             {
                 speaker = 1;
@@ -181,15 +192,13 @@ void main(void)
                     music_num = 1;
                 num = 0; // 从头开始播放
 
-                if (music_num == 0)
-                    music_num = sound_amount;
-                delayms(500); // 歌曲切换时延时0.5S
+                DelayMs(500); // 歌曲切换时延时0.5S
             }
         }
     }
 }
 
-void delayms(unsigned int t) // MS延时子程序
+void DelayMs(unsigned int t) // MS延时子程序
 {
     unsigned int i, j;
     for (i = 0; i < t; i++)
@@ -199,13 +208,13 @@ void delayms(unsigned int t) // MS延时子程序
     }
 }
 
-void delay(unsigned char t) // 延时子函数,控制发音的时间长度,每个节拍0.4S
+void DelayBeat(unsigned char t) // 延时子函数,控制发音的时间长度,每个节拍0.4S
 {
     unsigned char t1;
     unsigned long t2;
     for (t1 = 0; t1 < t; t1++) // 嵌套循环, 共延时t个半拍
     {
-        for (t2 = 0; t2 < 8000; t2++) // 延时期间, 可进入T0中断去发音
+        for (t2 = 0; t2 < 6500; t2++) // 延时期间, 可进入T0中断去发音
         {
             ;
         }
@@ -220,20 +229,14 @@ void timer0(void) interrupt 1 // T0中断程序,控制发音的音调
     TL0 = timer0l;
 }
 
-void song(void) // 演奏一个音符
-{
-    TH0 = timer0h; // 控制音调
-    TL0 = timer0l;
-    TR0 = 1;     // 启动T0, 由T0输出方波发音
-    delay(time); // 每个音符的演奏时间
-}
-////////////////////////////////////////////////////////////////////////////////////
+
+
 void music_play(void) // 播放相应歌曲的某个音符
 {
     if ((music_num == 1) && (play_enable == 1) && (doorbell_signal == 0))
     {   
         
-        fre = song1[num] + 7 * song1[num + 1] - 1; // 第i个是音符,第i+1个是第几个八度
+        fre = song1[num] + 7 * song1[num + 1] - 1; // 第i个是音符,第n+1个是第几个八度
         timer0h = FREQH[fre]; // 从数据表中读出频率数值,实际上是定时的时间长度
         timer0l = FREQL[fre];
         time = song1[num + 2]; // 读出时间长度数值
@@ -241,13 +244,13 @@ void music_play(void) // 播放相应歌曲的某个音符
         if (fre < 0) // 判断歌曲的结束位,结束后转到下一首
         {
             num = 0; // 下一首从头播放
-            LcdChange = 1;
+            lcd_change = 1;
             music_num = 2;
-            stop();
+            StopMusic();
         }
-        song();
+        PlayANote();
     }
-    ////////////////////////////////////////////////////////////////////////////////////
+
     if ((music_num == 2) && (play_enable == 1) && (doorbell_signal == 0))
     {   
         
@@ -259,13 +262,13 @@ void music_play(void) // 播放相应歌曲的某个音符
         if (fre < 0)
         {
             num = 0;
-            LcdChange = 1;
+            lcd_change = 1;
             music_num = 3;
-            stop();
+            StopMusic();
         }
-        song();
+        PlayANote();
     }
-    ////////////////////////////////////////////////////////////////////////////////////
+
     if ((music_num == 3) && (play_enable == 1) && (doorbell_signal == 0))
     {
         
@@ -277,13 +280,13 @@ void music_play(void) // 播放相应歌曲的某个音符
         if (fre < 0)
         {
             num = 0;
-            LcdChange = 1;
+            lcd_change = 1;
             music_num = 1;
-            stop();
+            StopMusic();
         }
-        song();
+        PlayANote();
     }
-    ////////////////////////////////////////////////////////////////////////////////////
+
     if ((doorbell_signal == 1) && (play_enable == 1))
     {
         fre = song_doorbell[num] + 7 * song_doorbell[num + 1] - 1;
@@ -295,8 +298,8 @@ void music_play(void) // 播放相应歌曲的某个音符
         if (fre < 0)
         {
             num = 0;
-            stop();
+            StopMusic();
         }
-        song();
+        PlayANote();
     }
 }
